@@ -711,6 +711,30 @@ function M.ensure_transmitted(cell_id, b64, callback, opts)
   callback(id)
 end
 
+-- Replace a cell's image bytes IN PLACE, reusing its existing image_id and
+-- placement geometry. Mirrors the GIF animation tick (start_animation): a
+-- retransmit to the same id makes the terminal swap the picture without a new
+-- placement, so mouse-driven figure updates repaint smoothly with no id churn.
+-- Returns true if an existing placement was updated, false otherwise (caller
+-- should fall back to ensure_transmitted for the first placement).
+function M.update_bytes(cell_id, png_b64)
+  local p = placements[cell_id]
+  if not p or not png_b64 or png_b64 == "" then return false end
+  p.png_hash = quick_hash(png_b64)
+  p.b64 = png_b64
+  if p.renderer == "placeholder" and p.cols and p.rows then
+    kitty_call_async("kitty_transmit_virtual", {
+      image_id = p.image_id, png_b64 = png_b64,
+      cols = p.cols, rows = p.rows,
+    })
+  else
+    kitty_call_async("kitty_transmit_only", {
+      image_id = p.image_id, png_b64 = png_b64,
+    })
+  end
+  return true
+end
+
 -- Build the placeholder virt_lines for a transmitted-virtual image.
 -- Returns list of virt_lines, each = list of {text, hl_group} chunks.
 function M.placeholder_virt_lines(cell_id)
@@ -749,6 +773,15 @@ end
 function M.placement_cols(cell_id)
   local p = placements[cell_id]
   if p and p.cols then return p.cols end
+  return nil
+end
+
+-- Grid geometry of a cell's placeholder image: rows, cols (terminal cells).
+-- nil if there is no placement or it isn't a virtual (placeholder) one — the
+-- mpl interactive bridge needs this to map mouse cells to figure fractions.
+function M.placement_geom(cell_id)
+  local p = placements[cell_id]
+  if p and p.rows and p.cols then return p.rows, p.cols end
   return nil
 end
 

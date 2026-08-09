@@ -40,6 +40,13 @@ pub struct Server {
     /// everything crawl; the epoch pre-cancels the old walk, this makes the
     /// new one wait for the old one's threads to actually drain.
     search_lock: Arc<tokio::sync::Semaphore>,
+    /// One-shot collectors for the matplotlib interactive bridge, keyed by the
+    /// injected mpl_op run's msg_id (a fresh UUID, globally unique). The kernel
+    /// event pump fulfills these with the run's rendered PNG (Some) instead of
+    /// routing the output to a cell, or None if the run went idle without an
+    /// image. These msg_ids are deliberately NOT in any session's msg_to_cell,
+    /// so the PNG never lands in a cell's outputs. See rpc/mpl.rs.
+    mpl_collectors: DashMap<String, tokio::sync::oneshot::Sender<Option<String>>>,
 }
 
 /// One relayed language server: its child + a writer to its stdin. The reader
@@ -64,6 +71,7 @@ mod exec;
 mod fs;
 mod graphics;
 mod lsp;
+pub(crate) mod mpl;
 mod notebook;
 mod proc;
 mod search;
@@ -83,6 +91,7 @@ impl Server {
             next_lsp_id: std::sync::atomic::AtomicU32::new(1),
             search_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             search_lock: Arc::new(tokio::sync::Semaphore::new(1)),
+            mpl_collectors: DashMap::new(),
         })
     }
 
@@ -288,6 +297,7 @@ impl Server {
             "restart_kernel" => self.restart_kernel(p).await,
             "execute" => self.execute(p).await,
             "execute_silent" => self.execute_silent(p).await,
+            "mpl_op" => self.mpl_op(p).await,
             "complete" => self.complete(p).await,
             "inspect" => self.inspect(p).await,
             "update_cell_source" => self.update_cell_source(p).await,

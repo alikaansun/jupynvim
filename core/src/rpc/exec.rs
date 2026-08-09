@@ -170,6 +170,32 @@ impl Server {
         let sid_clone = sid.clone();
         tokio::spawn(async move {
             while let Some(ev) = rx.recv().await {
+                // Matplotlib interactive bridge: if this event belongs to an
+                // injected mpl_op run (its parent is a registered collector),
+                // capture the rendered PNG and DON'T route it to a cell. The
+                // first image fulfills the collector; an idle status with no
+                // image resolves it as None so the caller doesn't wait out the
+                // timeout.
+                if let Some(parent) = super::mpl::event_parent(&ev) {
+                    if server.mpl_collectors.contains_key(parent) {
+                        if let Some(png) = super::mpl::event_png(&ev) {
+                            if let Some((_, tx)) = server.mpl_collectors.remove(parent) {
+                                let _ = tx.send(Some(png));
+                            }
+                            continue;
+                        }
+                        if super::mpl::event_is_idle(&ev) {
+                            if let Some((_, tx)) = server.mpl_collectors.remove(parent) {
+                                let _ = tx.send(None);
+                            }
+                            continue;
+                        }
+                        // Other events for this run (execute_input, busy status,
+                        // etc.) are noise — swallow them so they don't reach the
+                        // frontend as stray global kernel_events.
+                        continue;
+                    }
+                }
                 if let Some((cell_id, payload)) = session_clone.apply_event(&ev) {
                     let note = json!({
                         "session_id": sid_clone,

@@ -320,6 +320,25 @@ test_pcall("kitty placeholder builder produces non-empty virt_lines", function()
          "rows=" .. #rows .. " cols[1]=" .. #rows[1])
 end)
 
+-- T11.61: image.update_bytes swaps bytes in place for an existing placement
+-- (the primitive the interactive-plot bridge repaints through). No terminal or
+-- rpc client needed: kitty calls no-op without a client.
+test_pcall("image.update_bytes replaces bytes for an existing placement", function()
+  local img = require("jupynvim.notebook.image")
+  local none = img.update_bytes("no_such_cell", "AAAA")  -- no placement → false
+  img._placements["ph_cell"] = {
+    image_id = 42, png_hash = 123, b64 = "OLD",
+    placement_id = 1, renderer = "placeholder", rows = 16, cols = 48,
+  }
+  local ok1 = img.update_bytes("ph_cell", "NEWDATA")
+  local p = img._placements["ph_cell"]
+  local rows, cols = img.placement_geom("ph_cell")
+  img._placements["ph_cell"] = nil  -- cleanup
+  report("image.update_bytes replaces bytes for an existing placement",
+    none == false and ok1 == true and p.b64 == "NEWDATA" and rows == 16 and cols == 48,
+    string.format("none=%s ok1=%s b64=%s", tostring(none), tostring(ok1), tostring(p and p.b64)))
+end)
+
 -- T11.62: User's exact workflow — open, run, save, :e same path again, no dup
 test_pcall("repeated :e on same path doesn't accumulate cells", function()
   local p = vim.fn.tempname() .. ".ipynb"

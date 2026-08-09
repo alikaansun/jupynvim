@@ -26,6 +26,11 @@ https://github.com/user-attachments/assets/2a3fbd17-561d-4c37-b856-a912944f88f8
 - Inline images using the Kitty graphics protocol. Native PNG placement, not
   ASCII art, unless you ask for it. Animated GIFs loop at native speed via
   ImageMagick frame extraction.
+- Mouse-controlled matplotlib plots. `<leader>nz` turns the figure in a cell
+  interactive: drag a box to zoom, drag to pan, `r` to reset. It works on the
+  ordinary inline PNG (no `%matplotlib widget`, no ipywidgets, no webview) by
+  driving the figure server-side and repainting the Kitty image in place. See
+  [Interactive plots](#interactive-plots).
 - Markdown cells render with their own highlight overlay. Embedded
   `data:image/...;base64,...` URIs get rewritten to short placeholders so the
   buffer stays small while images still display.
@@ -322,6 +327,7 @@ an `.ipynb`.
 | Key | Action |
 |---|---|
 | `<C-j>` or `<C-k>` | Enter the next or prev cell's output in a scratch split with full vim motions |
+| `<leader>nz` | Toggle mouse zoom/pan on the current cell's matplotlib plot |
 | `<leader>nI` | Save current cell's image to file |
 | `<leader>nD` | Delete an embedded image from a markdown cell |
 | `]i` or `[i` | Jump to next or prev cell with an image |
@@ -335,6 +341,36 @@ an `.ipynb`.
 | `<leader>ni` | Interrupt kernel |
 | `<leader>nx` | Restart kernel |
 | `<leader>nL` | Force re-render |
+
+## Interactive plots
+
+VSCode's `%matplotlib widget` runs a JavaScript canvas in a webview and talks to
+the kernel over Jupyter comms. jupynvim is terminal-only, so that exact widget
+can't run here. Instead it fakes the interactive feel on the ordinary inline
+PNG, with no ipywidgets and no comm channel.
+
+Run a cell that draws a matplotlib figure, then press `<leader>nz` with the
+cursor in that cell. The plot becomes interactive:
+
+| Key | Action |
+|---|---|
+| `z` | Box-zoom mode (default): drag a rectangle to zoom into it |
+| `p` | Pan mode: drag to pan the axes |
+| `r` | Reset to the original view |
+| `<Esc>` or `q` | Leave interactive mode |
+| `<leader>nz` | Also toggles it off |
+
+Under the hood each drag is translated to figure coordinates, the kernel
+re-renders the figure with new axis limits, and the Kitty image is repainted in
+place — the same primitive that drives GIF animation. The zoomed view is a
+display-only change: `:w` still saves the figure the cell originally produced,
+and re-running the cell restores the full view.
+
+Requirements and limits: python kernels and a Kitty-graphics terminal (kitty or
+Ghostty); 2D rectilinear axes (3D/polar plots are left alone). Pointer
+resolution is one terminal cell, so bump `image_rows`/`image_cols` for finer
+control. If the drag region feels offset from the plot, nudge `mpl_row_offset` /
+`mpl_col_offset` (below).
 
 ## Configuration
 
@@ -355,8 +391,16 @@ require("jupynvim").setup({
 
   -- Inline image grid size in terminal cells (rows x cols). Default 16x48;
   -- bump for sharper output on large terminals or shrink for compact display.
+  -- Larger values also give finer mouse resolution for interactive plots.
   image_rows = 16,
   image_cols = 48,
+
+  -- Interactive-plot (<leader>nz) hit-region calibration. The figure's on-screen
+  -- box is derived from the cell layout; these nudge its top-left by whole
+  -- terminal cells if drags feel offset from the plot (e.g. with wrapped source
+  -- lines or an unusual gutter). Usually left at the defaults.
+  mpl_row_offset = 2,
+  mpl_col_offset = 2,
 
   -- Override the path to the jupynvim-core binary. Auto-detected from the
   -- plugin directory if unset.

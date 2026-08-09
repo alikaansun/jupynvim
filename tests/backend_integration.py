@@ -320,6 +320,73 @@ def t_silent_execute():
     os.unlink(nb_path)
 
 
+def _mpl_helper_src():
+    """The interactive-plot kernel helper, extracted from the Lua module so the
+    test and the plugin share one source of truth."""
+    import re
+    lua = (Path(__file__).resolve().parent.parent
+           / "lua/jupynvim/notebook/mpl.lua").read_text()
+    m = re.search(r"\[==\[(.*?)\]==\]", lua, re.S)
+    return m.group(1) if m else ""
+
+
+def t_mpl_op():
+    # Full bridge round-trip: install the helper, render a figure, then drive
+    # begin/box_zoom via the mpl_op RPC. The re-rendered PNG must come back,
+    # change on zoom, and NOT be appended to the cell's outputs.
+    cl = Client()
+    nb_path = tempfile.mktemp(suffix=".ipynb")
+    nb = make_test_nb()
+    nb["cells"].append({
+        "cell_type": "code", "id": "c4", "metadata": {},
+        "source": ("import matplotlib.pyplot as plt\n"
+                   "fig, ax = plt.subplots()\n"
+                   "ax.plot([0,1,2,3,4],[0,1,4,9,16])\n"
+                   "ax.set_xlim(0,4); ax.set_ylim(0,16)\n"
+                   "plt.show()"),
+        "execution_count": None, "outputs": [],
+    })
+    json.dump(nb, open(nb_path, "w"))
+    _, res = cl.call("open", {"path": nb_path})
+    sid = res["session_id"]
+    cl.call("start_kernel", {"session_id": sid}, timeout=15)
+    # Mirror the plugin's kernel-start injection: inline backend + helper.
+    cl.call("execute_silent", {"session_id": sid,
+             "code": "get_ipython().run_line_magic('matplotlib','inline')"})
+    cl.call("execute_silent", {"session_id": sid, "code": _mpl_helper_src()})
+    cl.events.clear()
+    cl.call("execute", {"session_id": sid, "cell_id": "c4"})
+    cl.wait_event(lambda e: e[0] == 2 and e[1] == "cell_event"
+                  and e[2][0].get("cell_id") == "c4"
+                  and e[2][0]["event"]["kind"] in ("execute_result", "display_data"),
+                  timeout=15)
+
+    err, r0 = cl.call("mpl_op", {"session_id": sid, "cell_id": "c4",
+                                 "op": "begin", "args": {}}, timeout=10)
+    png0 = r0.get("png_b64") if isinstance(r0, dict) else None
+    report("mpl_op begin returns a png",
+           err is None and isinstance(png0, str) and len(png0) > 100, str(err))
+
+    err, r1 = cl.call("mpl_op", {"session_id": sid, "cell_id": "c4", "op": "box_zoom",
+                                 "args": {"x0": 0.3, "y0": 0.3, "x1": 0.7, "y1": 0.7}},
+                      timeout=10)
+    png1 = r1.get("png_b64") if isinstance(r1, dict) else None
+    report("mpl_op box_zoom re-renders a different png",
+           err is None and isinstance(png1, str) and png1 != png0, str(err))
+
+    # The history-less injected runs must not accumulate cell outputs.
+    _, snap = cl.call("snapshot", {"session_id": sid})
+    c4 = {}
+    if isinstance(snap, dict):
+        c4 = next((c for c in snap.get("cells", []) if c.get("id") == "c4"), {})
+    nouts = len(c4.get("outputs", []))
+    report("mpl_op leaves cell outputs untouched", nouts == 1, f"outputs={nouts}")
+
+    cl.call("stop_kernel", {"session_id": sid})
+    cl.stop()
+    os.unlink(nb_path)
+
+
 # ── kernel-cleanup helpers ──────────────────────────────────────────────
 def _child_pids(ppid):
     out = subprocess.run(["pgrep", "-P", str(ppid)], capture_output=True, text=True).stdout
@@ -409,6 +476,7 @@ TESTS = [
     t_ping, t_list_kernels, t_open_close, t_kernel_lifecycle,
     t_run_cell_streams, t_run_cell_expression, t_run_cell_error,
     t_save_roundtrip, t_image_output, t_insert_delete_move, t_silent_execute,
+    t_mpl_op,
     t_kernel_killed_on_disconnect, t_kernel_killed_on_sigterm,
 ]
 
