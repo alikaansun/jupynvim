@@ -373,7 +373,7 @@ end
 -- Toggle interactive mode on the cell under the cursor. Bound to <leader>nz
 -- (keymaps.lua calls this directly).
 function M.toggle(buf)
-  local Notebook = require("jupynvim.notebook.init")
+  local Notebook = require("jupynvim.notebook")
   local nb = Notebook.get(buf)
   if not nb then return end
 

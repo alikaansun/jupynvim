@@ -17,7 +17,10 @@ from pathlib import Path
 
 import msgpack
 
-CORE = Path(__file__).resolve().parent.parent / "core/target/release/jupynvim-core"
+# JUPYNVIM_CORE lets a dev shell point at a debug build instead of paying for
+# a release compile on every iteration.
+CORE = Path(os.environ.get("JUPYNVIM_CORE")
+            or Path(__file__).resolve().parent.parent / "core/target/release/jupynvim-core")
 PASS, FAIL = 0, 0
 RESULTS = []
 

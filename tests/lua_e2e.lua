@@ -1,9 +1,20 @@
 -- Headless Neovim end-to-end tests for jupynvim.
--- Run with: nvim --headless -u NONE -c 'luafile lua_e2e.lua' -c 'qa'
+-- Run with: nvim --headless -u NONE -c 'luafile lua_e2e.lua' -c 'qa!'
+--
+-- qa!, not qa: the suite leaves modified notebook buffers behind, and plain
+-- qa aborts on E37 and then hangs headless nvim forever after the tally has
+-- already printed. `nix develop` provides nvim, a python3 kernelspec, and
+-- jupynvim-core needs to be on PATH (core/target/{debug,release}).
 
 -- Set up runtime path so we can require jupynvim
-local plugin_dir = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h")
-vim.opt.rtp:append(plugin_dir)
+-- :p first — luafile from inside tests/ gives a RELATIVE source, which
+-- resolved plugin_dir to "." and made every require fall through to an
+-- installed jupynvim instead of this working tree.
+local plugin_dir = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
+-- prepend, not append: an installed copy of jupynvim earlier on the
+-- runtimepath (nix store, lazy.nvim, packer) otherwise wins every require and
+-- the suite silently tests THAT instead of this working tree.
+vim.opt.rtp:prepend(plugin_dir)
 package.path = plugin_dir .. "/lua/?.lua;" .. plugin_dir .. "/lua/?/init.lua;" .. package.path
 
 local PASS, FAIL = 0, 0
@@ -337,6 +348,32 @@ test_pcall("image.update_bytes replaces bytes for an existing placement", functi
   report("image.update_bytes replaces bytes for an existing placement",
     none == false and ok1 == true and p.b64 == "NEWDATA" and rows == 16 and cols == 48,
     string.format("none=%s ok1=%s b64=%s", tostring(none), tostring(ok1), tostring(p and p.b64)))
+end)
+
+-- T11.62a: mpl.toggle must see the SAME notebook registry the rest of the
+-- plugin writes to. Requiring "jupynvim.notebook.init" instead of
+-- "jupynvim.notebook" loads a second copy of the module with its own empty
+-- registry, so toggle() bailed silently on every real notebook buffer.
+test_pcall("mpl.toggle finds the notebook for a real buffer", function()
+  local p = vim.fn.tempname() .. ".ipynb"
+  fresh_nb(p)
+  local buf = J.open(p)
+  vim.wait(2000)
+  local Mpl = require("jupynvim.notebook.mpl")
+  local Image = require("jupynvim.notebook.image")
+  -- Force the no-kitty path: reaching it proves Notebook.get(buf) resolved.
+  local sup = Image.supported
+  local msgs, notify = {}, vim.notify
+  Image.supported = function() return false end
+  vim.notify = function(m) table.insert(msgs, tostring(m)) end
+  pcall(Mpl.toggle, buf)
+  vim.notify, Image.supported = notify, sup
+  local warned = false
+  for _, m in ipairs(msgs) do if m:find("Kitty") then warned = true end end
+  report("mpl.toggle finds the notebook for a real buffer", warned,
+         string.format("notifications=%s nb=%s active=%s buf=%s",
+           vim.inspect(msgs), tostring(NB.get(buf) ~= nil),
+           tostring(Mpl._active ~= nil), tostring(buf)))
 end)
 
 -- T11.62: User's exact workflow — open, run, save, :e same path again, no dup
